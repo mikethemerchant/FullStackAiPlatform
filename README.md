@@ -22,6 +22,10 @@ This is not a tutorial project. It is a production-oriented blueprint demonstrat
 
 ---
 
+## YouTube video link: https://youtu.be/Xo6qMjg7wek
+
+-----
+
 # Business Outcomes (Phase 1 Baseline)
 
 Phase 1 establishes measurable operational capability before application migration begins.
