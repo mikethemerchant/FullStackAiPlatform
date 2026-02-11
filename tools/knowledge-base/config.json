@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Stacker AI Knowledge Base configuration",
+  "version": "1.0.0",
+  
+  "embedding": {
+    "model": "nomic-embed-text",
+    "ollamaEndpoint": "http://server:11434",
+    "dimensions": 768,
+    "chunkSize": 1000,
+    "chunkOverlap": 200
+  },
+  
+  "storage": {
+    "localPath": "C:\\Stacker\\knowledge-base",
+    "repositoryBackupPath": "tools/knowledge-base/embeddings",
+    "retentionDays": {
+      "logs": 90,
+      "code": -1,
+      "documentation": -1,
+      "devops": 90
+    }
+  },
+  
+  "indexing": {
+    "sourceCode": {
+      "rootPath": "src",
+      "includePatterns": ["*.cs", "*.csproj", "*.json"],
+      "excludePatterns": ["bin/**", "obj/**", "*.user"]
+    },
+    "documentation": {
+      "paths": ["README.md", "docs", "ops/runbooks"],
+      "includePatterns": ["*.md", "*.txt"]
+    },
+    "applicationLogs": {
+      "path": "src/Stacker-api/logs",
+      "pattern": "Stacker-*.log"
+    },
+    "devops": {
+      "organization": "https://dev.azure.com/company",
+      "project": "Towanda",
+      "repository": "Stacker",
+      "patEnvironmentVariable": "Stacker_DEVOPS_PAT",
+      "branches": ["main", "dev", "test"]
+    }
+  },
+  
+  "query": {
+    "topK": 5,
+    "similarityThreshold": 0.7,
+    "ragModel": "llama3",
+    "maxContextTokens": 4000
+  },
+  
+  "logging": {
+    "queryLogPath": "C:\\Stacker\\knowledge-base\\query-audit.log",
+    "includeUserIdentity": true,
+    "includeCorrelationId": true
+  }
+}

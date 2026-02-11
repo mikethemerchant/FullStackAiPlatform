@@ -1,0 +1,188 @@
+trigger:
+- main
+
+pool:
+  name: 'StackerAgentPool'
+
+variables:
+  buildConfiguration: 'Release'
+  projectPath: 'src/Stacker-api/Stacker.api.csproj'
+
+stages:
+- stage: Build
+  displayName: 'Build Stage'
+  jobs:
+  - job: Build
+    displayName: 'Build and Publish'
+    pool:
+      name: 'StackerAgentPool'
+    steps:
+    - task: UseDotNet@2
+      displayName: 'Install .NET 8'
+      inputs:
+        version: '8.x'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore'
+      inputs:
+        command: 'restore'
+        projects: '$(projectPath)'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Build'
+      inputs:
+        command: 'build'
+        projects: '$(projectPath)'
+        arguments: '--configuration $(buildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish'
+      inputs:
+        command: 'publish'
+        projects: '$(projectPath)'
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+        zipAfterPublish: true
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+
+- stage: DeployTest
+  displayName: 'Deploy to Test'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployTest
+    displayName: 'Deploy to Stacker_Test'
+    pool:
+      name: 'StackerAgentPool'
+    environment: 'Test'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: IISWebAppDeploymentOnMachineGroup@0
+            displayName: 'IIS Deploy: Stacker_Test'
+            inputs:
+              WebSiteName: 'Stacker_Test'
+              Package: '$(Pipeline.Workspace)/drop/**/*.zip'
+              TakeAppOfflineFlag: true
+
+- stage: DeployProd
+  displayName: 'Deploy to Production'
+  dependsOn: DeployTest
+  condition: succeeded()
+  jobs:
+  - deployment: DeployProd
+    displayName: 'Deploy to Stacker_Production'
+    pool:
+      name: 'StackerAgentPool'
+    environment: 'Production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: IISWebAppDeploymentOnMachineGroup@0
+            displayName: 'IIS Deploy: Stacker_Production'
+            inputs:
+              WebSiteName: 'Stacker_Production'
+              Package: '$(Pipeline.Workspace)/drop/**/*.zip'
+              TakeAppOfflineFlag: true
+
+- stage: UpdateKnowledgeBase
+  displayName: 'Update AI Knowledge Base'
+  dependsOn: DeployTest
+  condition: succeeded()
+  jobs:
+  - job: RebuildKB
+    displayName: 'Rebuild Knowledge Base (Incremental)'
+    pool:
+      name: 'StackerAgentPool'
+    timeoutInMinutes: 10
+    steps:
+    - checkout: self
+
+    - task: PowerShell@2
+      displayName: 'Index Source Code'
+      inputs:
+        targetType: 'filePath'
+        filePath: 'tools/knowledge-base/indexer/Index-SourceCode.ps1'
+        pwsh: false
+      env:
+        Stacker_DEVOPS_PAT: $(Stacker_DEVOPS_PAT)
+
+    - task: PowerShell@2
+      displayName: 'Index Documentation'
+      inputs:
+        targetType: 'filePath'
+        filePath: 'tools/knowledge-base/indexer/Index-Documentation.ps1'
+        pwsh: false
+      env:
+        Stacker_DEVOPS_PAT: $(Stacker_DEVOPS_PAT)
+
+    - task: PowerShell@2
+      displayName: 'Index Application Logs'
+      inputs:
+        targetType: 'filePath'
+        filePath: 'tools/knowledge-base/indexer/Index-ApplicationLogs.ps1'
+        pwsh: false
+      continueOnError: true
+
+    - task: PowerShell@2
+      displayName: 'Fetch DevOps Pipeline Data'
+      inputs:
+        targetType: 'filePath'
+        filePath: 'tools/knowledge-base/indexer/Fetch-DevOpsData.ps1'
+        arguments: '-MaxRuns 20'
+        pwsh: false
+      continueOnError: true
+      env:
+        Stacker_DEVOPS_PAT: $(Stacker_DEVOPS_PAT)
+
+    - task: PowerShell@2
+      displayName: 'Verify Knowledge Base'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Required stores - pipeline fails if these are missing
+          $required = @("source-code", "documentation")
+          # Optional stores - warn only (logs may not exist on agent, PAT may not be configured)
+          $optional = @("application-logs", "devops-pipelines")
+          $failed = $false
+
+          Write-Host "=== Required Stores ===" -ForegroundColor Cyan
+          foreach ($store in $required) {
+            $file = "C:\Stacker\knowledge-base\$store.json"
+            if (Test-Path $file) {
+              $size = [Math]::Round((Get-Item $file).Length / 1KB, 1)
+              $modified = (Get-Item $file).LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+              Write-Host "[PASS] $store ($size KB, updated $modified)" -ForegroundColor Green
+            } else {
+              Write-Host "[FAIL] $store - file not found" -ForegroundColor Red
+              $failed = $true
+            }
+          }
+
+          Write-Host ""
+          Write-Host "=== Optional Stores ===" -ForegroundColor Cyan
+          foreach ($store in $optional) {
+            $file = "C:\Stacker\knowledge-base\$store.json"
+            if (Test-Path $file) {
+              $size = [Math]::Round((Get-Item $file).Length / 1KB, 1)
+              $modified = (Get-Item $file).LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+              Write-Host "[PASS] $store ($size KB, updated $modified)" -ForegroundColor Green
+            } else {
+              Write-Host "[WARN] $store - not available (this is OK if logs or PAT are not on this agent)" -ForegroundColor Yellow
+            }
+          }
+
+          Write-Host ""
+          if ($failed) {
+            Write-Error "One or more required knowledge base stores failed to update."
+            exit 1
+          }
+          Write-Host "Knowledge base verification complete." -ForegroundColor Green
+        pwsh: false
